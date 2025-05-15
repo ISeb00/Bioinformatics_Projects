@@ -1,0 +1,176 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+plot(cars)
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+
+--
+Seurat Tutorial
+--
+
+Loading in the appropriate libraries. Seurat for our DE analysis and dplyr and patchwork for working with dataframes and plot generation. We'll read in our data and create the object, which holds count data and analysis data.
+```{r}
+library(dplyr)
+library(Seurat)
+library(patchwork)
+
+pbmc.data <- Read10X(data.dir = "~/Ingrid/BIOL668/R work/pbmc3k_filtered_gene_bc_matrices/filtered_gene_bc_matrices/hg19/")
+                     
+pbmc <- CreateSeuratObject(counts = pbmc.data, project = "pbmc3k", min.cells = 3, min.features = 200)
+pbmc
+```
+We can do some quality control, filtering for cells with high amounts of mitochondrial contamination, which might indicate a dying cell. The percentage feature set method will search for genes matching those in the mitochondria.
+```{r}
+pbmc[["percent.mt"]] <- PercentageFeatureSet(pbmc, pattern = "^MT-")
+```
+We can then use a violin plot to visualize this data, and filter based on these plots. We'll select for feature counts between 2500 and 200 and for cells with less than 5% mitochondrial counts.
+```{r}
+VlnPlot(pbmc, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+```
+We can also visualize feature-feature relationships using scatter plots. For this we'll do percent mitochondrial count vs RNA count and feature count vs RNA count. We can see a bit of a trend between feature and RNA count.
+```{r}
+plot1 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + plot2
+```
+Here, we'll apply the filters mentioned above to clean up the data.
+```{r}
+pbmc <- subset(pbmc, subset = nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mt < 5)
+```
+We'll normalize our data using a log transform, with the Normalize Data method, the Log Normalize method, and the default 10000 scale factor.
+```{r}
+pbmc <- NormalizeData(pbmc, normalization.method = "LogNormalize", scale.factor = 10000)
+```
+We'll now do feature selection, looking for features which have great variance cell-to-cell and are most likely to be involved in DE. We'll identify the top 10 most variable genes and label them in the following plots.
+```{r}
+pbmc <- FindVariableFeatures(pbmc, selection.method = "vst", nfeatures = 2000)
+
+top10 <- head(VariableFeatures(pbmc), 10)
+
+
+plot1 <- VariableFeaturePlot(pbmc)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+plot1 + plot2
+```
+We can also apply a linear transformation to scale our data so that later analyses are not affected by domination of highly-expressed genes.
+```{r}
+all.genes <- rownames(pbmc)
+pbmc <- ScaleData(pbmc, features = all.genes)
+```
+And now that our data is ready, we can perform linear dimensional reduction, making a PCA plot to determine if we can see any clustering to explain or provide ideas for comparison components.
+```{r}
+pbmc <- RunPCA(pbmc, features = VariableFeatures(object = pbmc))
+```
+We can visualize the reduction, taking a peek at the first five features and five dimensions.
+```{r}
+print(pbmc[["pca"]], dims = 1:5, nfeatures = 5)
+```
+We can also look at scatter plots of the first and second dimensions. We can see a more apparent separation in the second PC.
+```{r}
+VizDimLoadings(pbmc, dims = 1:2, reduction = "pca")
+```
+And finally generate a PCA plot of the first and second dimension. The large break in the second dimension scatter plot translates differently when on the 2 PC axis plot, and it seems as though perhaps the first PC axis plays a better role in explaining data clustering.
+```{r}
+DimPlot(pbmc, reduction = "pca") + NoLegend()
+```
+We can also create dimensional heat maps, with cells and features ordered according to their PCA scores, and the more extreme cells plotted on the edges of the spectrum.
+```{r}
+DimHeatmap(pbmc, dims = 1, cells = 500, balanced = TRUE)
+```
+We can do this in every dimension to determine which best explains the most variance. PC 1 and 2 seem to best demonstrate more extreme variance.
+```{r}
+DimHeatmap(pbmc, dims = 1:15, cells = 500, balanced = TRUE)
+```
+An elbow plot is helpful as well, organizing data points based on how well each PC explains variance. We can see here that PC 1 and 2 have the most variance, with the PCs plateauing around PC 7.
+```{r}
+ElbowPlot(pbmc)
+```
+Then apply modularity optimization techniques to cluster the cells.
+```{r}
+pbmc <- FindNeighbors(pbmc, dims = 1:10)
+pbmc <- FindClusters(pbmc, resolution = 0.5)
+```
+And check the cluster IDs.
+```{r}
+head(Idents(pbmc), 5)
+```
+Non-linear dimensional reduction can be used to support previosuly explored data and graphs. We should see cells cluster according to the PC dimensions analyzed above.
+```{r}
+pbmc <- RunUMAP(pbmc, dims = 1:10)
+```
+
+```{r}
+DimPlot(pbmc, reduction = "umap")
+```
+We can now analyze the above clusters for DE using the presto package.
+```{r}
+#saveRDS(pbmc, file = "../output/pbmc_tutorial.rds")
+cluster2.markers <- FindMarkers(pbmc, ident.1 = 2)
+head(cluster2.markers, n = 5)
+```
+
+```{r}
+cluster5.markers <- FindMarkers(pbmc, ident.1 = 5, ident.2 = c(0, 3))
+head(cluster5.markers, n = 5)
+```
+
+```{r}
+pbmc.markers <- FindAllMarkers(pbmc, only.pos = TRUE)
+pbmc.markers %>%
+    group_by(cluster) %>%
+    dplyr::filter(avg_log2FC > 1)
+```
+
+```{r}
+cluster0.markers <- FindMarkers(pbmc, ident.1 = 0, logfc.threshold = 0.25, test.use = "roc", only.pos = TRUE)
+```
+And use violin plots to visualize marker expression.
+```{r}
+VlnPlot(pbmc, features = c("MS4A1", "CD79A"))
+```
+
+```{r}
+VlnPlot(pbmc, features = c("NKG7", "PF4"), slot = "counts", log = TRUE)
+```
+
+```{r}
+FeaturePlot(pbmc, features = c("MS4A1", "GNLY", "CD3E", "CD14", "FCER1A", "FCGR3A", "LYZ", "PPBP",
+    "CD8A"))
+```
+Or use DoHeatMap to generate plots of expression heatmaps for given cells and features.
+```{r}
+pbmc.markers %>%
+    group_by(cluster) %>%
+    dplyr::filter(avg_log2FC > 1) %>%
+    slice_head(n = 10) %>%
+    ungroup() -> top10
+DoHeatmap(pbmc, features = top10$gene) + NoLegend()
+```
+And we can also label clusters based on cell type.
+```{r}
+new.cluster.ids <- c("Naive CD4 T", "CD14+ Mono", "Memory CD4 T", "B", "CD8 T", "FCGR3A+ Mono",
+    "NK", "DC", "Platelet")
+names(new.cluster.ids) <- levels(pbmc)
+pbmc <- RenameIdents(pbmc, new.cluster.ids)
+DimPlot(pbmc, reduction = "umap", label = TRUE, pt.size = 0.5) + NoLegend()
+```
+
+```{r}
+library(ggplot2)
+plot <- DimPlot(pbmc, reduction = "umap", label = TRUE, label.size = 4.5) + xlab("UMAP 1") + ylab("UMAP 2") +
+    theme(axis.title = element_text(size = 18), legend.text = element_text(size = 18)) + guides(colour = guide_legend(override.aes = list(size = 10)))
+```
+Using all above analyses can help us determine which dimensions might best explain variance among data, and also help identify differentially expressed genes.
