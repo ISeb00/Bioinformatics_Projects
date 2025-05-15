@@ -1,0 +1,208 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+plot(cars)
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+
+--
+DESEQ2
+--
+
+Loading in required libraries. DESEQ2 will help us conduct differential expression analyses and tidyverse contains useful transformation functions.
+```{r}
+library( "DESeq2" )
+library(tidyverse)
+library(ggplot2)
+```
+
+We'll read in our data first and adjust so that our col names in the counts data match the row names in the meta data.
+```{r}
+counts_data <- read.csv('rna_counts_data.csv', header = TRUE)
+counts_data <- counts_data %>% remove_rownames %>% column_to_rownames(var="Geneid")
+count_data <- counts_data[,c(0,2:23)]
+colnames(count_data) <- c("30","54","55","28","31","43","46","49","32","44","10","1","24","4","19","20","23","27","9","21","29","7")
+head(count_data)
+```
+
+```{r}
+map_data <- read.csv('rna_map_update copy.csv', header = TRUE)
+head(map_data)
+```
+
+```{r}
+meta_data <- map_data[,c(4,1:3,5)]
+meta_data <- meta_data %>% remove_rownames %>% column_to_rownames(var="Sample.Number")
+head(meta_data)
+```
+
+```{r}
+all(colnames(count_data) %in% rownames(meta_data))
+```
+
+```{r}
+all(colnames(count_data) == rownames(meta_data))
+```
+We'll then create a deseq data object that contains data from the earlier datasets, our counts and meta data files.
+```{r}
+dds <- DESeqDataSetFromMatrix(countData = count_data,
+                              colData = meta_data,
+                              design = ~ Condition)
+```
+
+```{r}
+dds
+```
+We can do some pre filtering of the data now to simplify later work. We'll keep only data with counts higher than 10.
+```{r}
+keep <- rowSums(counts(dds)) >= 10
+dds <- dds[keep,]
+dds
+```
+We can also set our 'control' group, which will be the wild type (WT) samples, as opposed to the mutant proteins.
+```{r}
+dds$Condition <- relevel(dds$Condition, ref = 'WT')
+```
+And normalize our data.
+```{r}
+dds <- estimateSizeFactors(dds)
+normalized_counts <- counts(dds, normalized = TRUE)
+```
+The differential expression analyses can now be run on our cleaned up data. This is all within the DESeq function. We can view results of the DE analysis using results, which outputs the log2 fold changes, the p values, and the adjusted p values.
+```{r}
+dds <- DESeq(dds)
+res <- results(dds)
+res
+```
+And view a summary of the results.
+```{r}
+summary(res)
+```
+That's a lot of p values, so we can figure out the number of samples with a adjusted p value of less than 0.1.
+```{r}
+sum(res$padj < 0.1, na.rm=TRUE)
+```
+Or those with less than 0.05 for stronger statistical significance.
+```{r}
+res05 <- results(dds, alpha=0.05)
+summary(res05)
+```
+
+```{r}
+sum(res$padj < 0.05, na.rm=TRUE)
+```
+We can then convert the results data to a dataframe and take a peek at the top couple of lines. This dataframe can be used for further analyses.
+```{r}
+data <- data.frame(res)
+head(data)
+```
+We can generate a PCA plot of our data, using the rlog object of our data and specifying the column in our metadata we are interested in. We can see the top 500 most variable genes, and we hope to see clustering by group as an explanation for variance, but this data does not seem to cluster well based on condition.
+```{r}
+rld <- rlog(dds)
+plotPCA(rld, intgroup=c("Condition"))
+```
+Volcano plots can be used to show p values vs fold change, which can help identify genes with large and significant changes. We will add another value to our data, assigning p adjusted values to up or down regulation of genes.
+```{r}
+data <- data %>%
+  mutate(
+  Expression = case_when(log2FoldChange >= log(1) & padj <= 0.05 ~ "Up-regulated",
+  log2FoldChange <= -log(1) & padj <= 0.05 ~ "Down-regulated",
+  TRUE ~ "Unchanged")
+  )
+head(data)
+```
+And then find the top 10 up and down regulated genes using the p adjusted values and our newly created expression column. This gives us an idea of which genes are demonstrating the most variance between the samples.
+```{r}
+top <- 10
+
+top_genes <- bind_rows(
+  data %>%
+  filter(Expression == 'Up-regulated') %>%
+  arrange(padj, desc(abs(log2FoldChange))) %>%
+  head(top),
+  data %>%
+  filter(Expression == 'Down-regulated') %>%
+  arrange(padj, desc(abs(log2FoldChange))) %>%
+  head(top)
+  )
+
+Top_Hits = head(arrange(data,pvalue),10)
+Top_Hits
+```
+And then construct our volcano plot. We'll be looking for genes with good significance and large change, usually around the edges of the volcano plots.
+```{r}
+data$label = if_else(rownames(data) %in% rownames(Top_Hits), rownames(data), "")
+
+p1 <- ggplot(data, aes(log2FoldChange, -log(pvalue,10))) + 
+geom_point( size = 2/5) +
+xlab(expression("log"[2]*"FC")) +
+ylab(expression("-log"[10]*"P-Value")) +
+xlim(-4.5, 4.5)
+p1
+```
+We can help ourselves out by highlighting the genes with a p value less than 0.05. Not as many genes pop red as seen in the tutorial, but we've got a few that are worth taking a closer look at for DE.
+```{r}
+p2 <- ggplot(data, aes(log2FoldChange, -log(pvalue,10))) + 
+geom_point(aes(color = Expression), size = 2/5) +
+
+xlab(expression("log"[2]*"FC")) +
+ylab(expression("-log"[10]*"P-Value")) +
+scale_color_manual(values = c("firebrick3", "black", "firebrick3")) +
+xlim(-4.5, 4.5) +
+theme(legend.position = "none")
+p2
+```
+We can annotate the top 10 most significant genes overall. This hellps us identify which genes are worth further analysis for DE.
+```{r}
+library(ggrepel)
+p3 <- ggplot(data, aes(log2FoldChange, -log(pvalue,10))) + 
+geom_point(aes(color = Expression), size = 2/5) +
+
+xlab(expression("log"[2]*"FC")) +
+ylab(expression("-log"[10]*"P-Value")) +
+scale_color_manual(values = c("firebrick3", "black", "firebrick3")) +
+xlim(-4.5, 4.5) +
+theme(legend.position = "none") +
+geom_text_repel(aes(label = label), size = 2.5)
+p3
+```
+And we can also highlight which genes are significant in upregulation and downregulation.
+```{r}
+p4 <- ggplot(data, aes(log2FoldChange, -log(pvalue,10))) + 
+geom_point(aes(color = Expression), size = 2/5) +
+
+xlab(expression("log"[2]*"FC")) +
+ylab(expression("-log"[10]*"P-Value")) +
+scale_color_manual(values = c("dodgerblue3", "black", "firebrick3")) +
+xlim(-4.5, 4.5)
+p4
+```
+And add labels for annotation and identification.
+```{r}
+p5 <- ggplot(data, aes(log2FoldChange, -log(pvalue,10))) + 
+geom_point(aes(color = Expression), size = 2/5) +
+
+xlab(expression("log"[2]*"FC")) +
+ylab(expression("-log"[10]*"P-Value")) +
+scale_color_manual(values = c("dodgerblue3", "black", "firebrick3")) +
+xlim(-4.5, 4.5) +
+geom_text_repel(aes(label = label), size = 2.5)
+p5
+```
+From this collection of plots, we have identified the top ten significantly differentially expressed genes in our sample, and whether they are being up or down regulated. This can help us make decisions about the role protein mutations might play in gene expression, and the bigger picture of what effect they have on the organism as a system. Further exploration of these genes and their pathways might shed light on diseases linked to mutations of this protein, and how we might remedy them.
+```{r}
+
+```
+
