@@ -9,7 +9,3 @@ Projects for BIOL 668 Bioinformatics module
 >Uses rna_counts_data.csv and rna_map_update copy.csv to run differential expression analyses. Data is pre-filtered to normalize counts and then analyzed with the DESeq command. PCA and volcano plots are generated for visualization.
 4. Sebor_Seurat.rmd
 >Uses pbmc3k_filtered_gene_bc_matrices.tar.gz to perform feature selection, scaling and normalization, linear and non-linear dimensional reduction, cell clustering, identification of differentially expressed features, and cell type annotation.
-5. Fastp
->
-6. Kaiju
->
