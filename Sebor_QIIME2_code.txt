@@ -1,0 +1,175 @@
+mkdir qiime2-moving-pictures-tutorial	#makes directory called qiime2-moving-pictures-tutorial
+cd qiime2-moving-pictures-tutorial	#makes qiime2-moving-pictures-tutorial the working directory
+
+mkdir emp-single-end-sequences	#makes directory within qiime2-moving-pictures-tutorial called emp-single-end-sequences
+
+qiime tools import \	#uses the import tool to import the raw data files into the artifacts that QIIME2 uses
+  --type EMPSingleEndSequences \	#specifies the type of artifact to create, in this case one used for multiplexed smps
+  --input-path emp-single-end-sequences \	#specifies the barcode and fastq files in the emp-single-end-sequences directory are to be used as input for the import
+  --output-path emp-single-end-sequences.qza	#outputs the multiplexed data
+
+qiime tools peek emp-single-end-sequences.qza	#allows us to check import by displaying UUID, type, and format
+
+qiime demux emp-single \	#command to demultiplex single-end read data barcoded according to EMP protocol
+  --i-seqs emp-single-end-sequences.qza \	#specifies the input which is the sequences to be demultiplexed
+  --m-barcodes-file sample-metadata.tsv \	#parameter that specifies the metadata file
+  --m-barcodes-column barcode-sequence \	#parameter that specifies the column within the metadata file containing the per smp barcodes
+  --o-per-sample-sequences demux.qza \	#outputs the demultiplxed data file
+  --o-error-correction-details demux-details.qza	#outputs file of the barcode error corrections
+
+qiime demux summarize \	#command to summarize demultiplex results which includes seqs per smp and distribution of seq quality
+  --i-data demux.qza \	#specifies input data as our demux file
+  --o-visualization demux.qzv	#outputs visualization file of summary and interactive plots
+
+qiime tools view demux.qzv	#command to view qzv files
+
+qiime dada2 denoise-single \	#command to denoise data using dada2 to detect and attempt to correct amplicon seq data and filter phiX reads and chimeric seqs
+  --i-demultiplexed-seqs demux.qza \	#specifies input of demux data to be denoised
+  --p-trim-left 0 \	#parameter that trims off the first 0 bases
+  --p-trunc-len 120 \	#parameter that truncates seqs at position 120
+  --o-representative-sequences rep-seqs-dada2.qza \	#outputs trimmed feature seqs and maps feature IDs from table-dada2 to their seqs
+  --o-table table-dada2.qza \	#outputs feature table of counts of each unique seq in each smp
+  --o-denoising-stats stats-dada2.qza	#outputs denoising stats of percentages and numbers of data that qualified for certain filters
+
+qiime metadata tabulate \	#command to make tabular view of metadata
+  --m-input-file stats-dada2.qza \	#specifies input file
+  --o-visualization stats-dada2.qzv	#outputs visualization file of dada2 denoising stats
+
+qiime quality-filter q-score \	#command to filter seqs based on quality scores
+ --i-demux demux.qza \	#specifies input file of demux data to be scored and filtered
+ --o-filtered-sequences demux-filtered.qza \	#outputs filtered demux seqs
+ --o-filter-stats demux-filter-stats.qza	#outputs filtering stats
+
+qiime deblur denoise-16S \	#command to denoise data using deblur which uses seq error profiles to pair bad reads with true biological seqs with a 16S ref as a positive filter
+  --i-demultiplexed-seqs demux-filtered.qza \	#specifies input file of filtered seqs
+  --p-trim-length 120 \	#parameter that truncates seqs at position 120
+  --o-representative-sequences rep-seqs-deblur.qza \	#outputs denoised feature seqs
+  --o-table table-deblur.qza \	#outputs denoised feature table
+  --p-sample-stats \	#parameter that gathers stats per smp
+  --o-stats deblur-stats.qza	#outputs per smp denoising stats
+
+qiime metadata tabulate \	#command to make tabular view of metadata
+  --m-input-file demux-filter-stats.qza \	#specifies input file
+  --o-visualization demux-filter-stats.qzv	#outputs visualization file of quality filtering stats
+qiime deblur visualize-stats \	#command to display deblur stats per smp
+  --i-deblur-stats deblur-stats.qza \	#specifies input file
+  --o-visualization deblur-stats.qzv	#outputs visualization file of deblur denoising stats
+
+mv rep-seqs-dada2.qza rep-seqs.qza	#renames dada2 or deblur denoised rep-seq data for next steps
+mv table-dada2.qza table.qza	#renames dada2 or deblur denoised table data for next steps
+
+qiime feature-table summarize \	#command to make visual and tabular summary of feature table with number of seqs per smp and per feature
+  --i-table table.qza \	#specifies input file
+  --o-visualization table.qzv \	#outputs visualization file of feature table summary
+  --m-sample-metadata-file sample-metadata.tsv	#parameter that specifies the metadata file
+qiime feature-table tabulate-seqs \	#command to make tabular view of feature ID to seq mapping with links to BLAST each seq
+  --i-data rep-seqs.qza \	#specifies input file
+  --o-visualization rep-seqs.qzv	#outputs visualization file of seqs
+
+qiime phylogeny align-to-tree-mafft-fasttree \	#command to generate phylogenetic tree
+  --i-sequences rep-seqs.qza \	#specifies input file
+  --o-alignment aligned-rep-seqs.qza \	#outputs mafft msa
+  --o-masked-alignment masked-aligned-rep-seqs.qza \	#outputs filtered msa
+  --o-tree unrooted-tree.qza \	#outputs FastTree unrooted phylo tree from masked alignment
+  --o-rooted-tree rooted-tree.qza	#outputs midpoint rooted phylo tree
+
+qiime diversity core-metrics-phylogenetic \	#command to generate phylo and non phylo diversity metrics
+  --i-phylogeny rooted-tree.qza \	#specifies tree input file
+  --i-table table.qza \	#specifies table input file
+  --p-sampling-depth 1103 \	#parameter for sampling depth which is the total frequency that each smp should be rarefied to before computation
+  --m-metadata-file sample-metadata.tsv \	#specifies metadata file for emperor plots
+  --output-dir core-metrics-results	#outputs directory containing alpha and beta diversity metrics
+
+qiime diversity alpha-group-significance \	#command to compare groups of alpha diversity values
+  --i-alpha-diversity core-metrics-results/faith_pd_vector.qza \	#specifies input file as faith phylogenetic diversity to measure community richness
+  --m-metadata-file sample-metadata.tsv \	#parameter that specifies the metadata file to provide categorical parameters
+  --o-visualization core-metrics-results/faith-pd-group-significance.qzv	#outputs visualization file of diversity and categorical correlation
+
+qiime diversity alpha-group-significance \	#command to compare groups of alpha diversity values
+  --i-alpha-diversity core-metrics-results/evenness_vector.qza \	#specifies input file as measure of evenness
+  --m-metadata-file sample-metadata.tsv \	#parameter that specifies the metadata file to provide categorical parameters
+  --o-visualization core-metrics-results/evenness-group-significance.qzv	#outputs visualization file of diversity and categorical correlation
+
+qiime diversity beta-group-significance \	#command to determine significant difference using PERMANOVA
+  --i-distance-matrix core-metrics-results/unweighted_unifrac_distance_matrix.qza \	#specififies input file as the unwieghted unifrac dists to be compared
+  --m-metadata-file sample-metadata.tsv \	#parameter that specifies the metadata file to provide categorical parameters
+  --m-metadata-column body-site \	#parameter that specifies the metadata file column to provide one categorical parameter
+  --o-visualization core-metrics-results/unweighted-unifrac-body-site-significance.qzv \	#outputs visualization file of significance plots and pariwise tests
+  --p-pairwise	#parameter that conducts pariwise tests to determine difference between specific pairs
+
+qiime diversity beta-group-significance \	#command to determine significant difference using PERMANOVA
+  --i-distance-matrix core-metrics-results/unweighted_unifrac_distance_matrix.qza \	#specififies input file as the unwieghted unifrac dists to be compared
+  --m-metadata-file sample-metadata.tsv \	#parameter that specifies the metadata file to provide categorical parameters
+  --m-metadata-column subject \	#parameter that specifies the metadata file column to provide one categorical parameter
+  --o-visualization core-metrics-results/unweighted-unifrac-subject-group-significance.qzv \	#outputs visualization file of significance plots and pariwise tests
+  --p-pairwise	#parameter that conducts pariwise tests to determine difference between specific pairs
+
+qiime emperor plot \	#command to generate PCoA plots of composition in context of metadata
+  --i-pcoa core-metrics-results/unweighted_unifrac_pcoa_results.qza \	#specifies input file of matrix to be plotted as unweighted unifrac
+  --m-metadata-file sample-metadata.tsv \	#parameter that specifies metadata file for categorical data
+  --p-custom-axes days-since-experiment-start \	#parameter that defines custom axis
+  --o-visualization core-metrics-results/unweighted-unifrac-emperor-days-since-experiment-start.qzv	#outputs visualiztion file of emperor plot
+
+qiime emperor plot \	#command to generate PCoA plots of composition in context of metadata
+  --i-pcoa core-metrics-results/bray_curtis_pcoa_results.qza \	#specifies input file of matrix to be plotted as bray curtis
+  --m-metadata-file sample-metadata.tsv \	#parameter that specifies metadata file for categorical data
+  --p-custom-axes days-since-experiment-start \	#parameter that defines custom axis
+  --o-visualization core-metrics-results/bray-curtis-emperor-days-since-experiment-start.qzv	#outputs visualiztion file of emperor plot
+
+qiime diversity alpha-rarefaction \	#command to generate alpha rarefaction curves
+  --i-table table.qza \	#specifies input file of feature table to be used
+  --i-phylogeny rooted-tree.qza \	#specifies input file of phylogeny tree to be used
+  --p-max-depth 4000 \	#parameter for max rarefaction depth
+  --m-metadata-file sample-metadata.tsv \	#parameter that specifies metadata file to be used to group smps
+  --o-visualization alpha-rarefaction.qzv	#outputs visualization file of rarefaction curves that can be grouped with different metrics and categories
+
+qiime feature-classifier classify-sklearn \	#command to taxonomically classify seqs
+  --i-classifier gg-13-8-99-515-806-nb-classifier.qza \	#specifies classifier input file as naive bayes trained on greengenes
+  --i-reads rep-seqs.qza \	#specifies input data as our trimmed seqs
+  --o-classification taxonomy.qza	#outputs classified seqs file
+
+qiime metadata tabulate \	#command to make tabular view of metadata
+  --m-input-file taxonomy.qza \	#specifies input file of metadata
+  --o-visualization taxonomy.qzv	#outputs visualization file of table of metadata
+
+qiime taxa barplot \	#command to make barplots of smps taxonomic composition
+  --i-table table.qza \	#specifies input file of feature table
+  --i-taxonomy taxonomy.qza \	#specifies input file of classified seqs
+  --m-metadata-file sample-metadata.tsv \	#parameter that specifies metadata file to use
+  --o-visualization taxa-bar-plots.qzv	#outputs visualization file of barplots
+
+qiime feature-table filter-samples \	#command to filter samples from feature table
+  --i-table table.qza \	#specifies feature table input
+  --m-metadata-file sample-metadata.tsv \	#parameter that specifies metadata file
+  --p-where "[body-site]='gut'" \	#parameter that specifies filtering criteria and selects for gut body-site smps
+  --o-filtered-table gut-table.qza	#outputs filtered feature table
+
+qiime composition ancombc \	#command to perform ANCOM-BC differential abundance testing
+  --i-table gut-table.qza \	#specifies filtered feature table input
+  --m-metadata-file sample-metadata.tsv \	#parameter that specifies metadata file to use
+  --p-formula 'subject' \	#parameter that specifies absolute abundances will depend on subject variables within metadata
+  --o-differentials ancombc-subject.qza	#outputs calculated per feature differentials
+
+qiime composition da-barplot \	#command to make barplots of ANCOM-BC data
+  --i-data ancombc-subject.qza \	#specifies input as calculated differentials
+  --p-significance-threshold 0.001 \	#parameter that excludes data with significance levels greater than this value
+  --o-visualization da-barplot-subject.qzv	#outputs barplot
+
+qiime taxa collapse \	#command to filter features at taxonomic level of interest
+  --i-table gut-table.qza \	#specifies input of gut features
+  --i-taxonomy taxonomy.qza \	#specifies input of classified seqs
+  --p-level 6 \	#parameter for level of taxonomic interest, in this case genus
+  --o-collapsed-table gut-table-l6.qza	#outputs feature table collapsed at genus level
+
+qiime composition ancombc \	#command to perform ANCOM-BC differential abundance testing
+  --i-table gut-table-l6.qza \	specifies filtered and collapsed feature table input
+  --m-metadata-file sample-metadata.tsv \	#parameter that specifies metadata file to use
+  --p-formula 'subject' \	#parameter that specifies absolute abundances will depend on subject variables within metadata
+  --o-differentials l6-ancombc-subject.qza	#outputs calculated per feature differentials
+
+qiime composition da-barplot \	#command to make barplots of ANCOM-BC data
+  --i-data l6-ancombc-subject.qza \	#specifies input as calculated differentials
+  --p-significance-threshold 0.001 \	#parameter that excludes data with significance levels greater than this value
+  --p-level-delimiter ';' \	#splits levels of hierarchical info when making labels using ;
+  --o-visualization l6-da-barplot-subject.qzv	#outputs barplot
+
